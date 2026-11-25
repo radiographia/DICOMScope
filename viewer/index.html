@@ -2,13 +2,224 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- user-scalable=no: блокирует системный pinch-зум страницы в iOS
+         WKWebView / Android WebView, чтобы щипок доставался Cornerstone,
+         а не браузеру (touch-action: none на элементе вьюпорта Cornerstone
+         ставит сам, в enableElement). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="robots" content="noindex,nofollow" />
     <link rel="icon" href="data:," />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://telegram.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://telegram.org; font-src 'self'; object-src 'none'; base-uri 'self'" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <title>DICOMScope Viewer Spike</title>
-    <script type="module" crossorigin src="./assets/index-CYnXiiIp.js"></script>
+    <style>
+      /* Единый полноэкранный каркас: 100dvh корректно считает высоту
+         в мобильных WebView (адресная строка/шторка), Telegram-переменные
+         дают безопасный отступ от челки и системных кнопок ✕/⋮ в
+         полноэкранном режиме (на десктопе в обычном режиме они = 0px). */
+      html, body, #app {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100vh;
+        height: 100dvh;
+        overflow: hidden;
+        background: #000;
+      }
+
+      #app {
+        display: flex;
+        flex-direction: column;
+        color: #eee;
+        font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      }
+
+      /* ── Тулбар ─────────────────────────────────────────────────────
+         Безопасный отступ сверху: 0px на десктопе, точная высота
+         челки/кнопок Telegram на iOS/Android. */
+      .dicom-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        padding-top: calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px));
+        padding-left: calc(12px + var(--tg-safe-area-inset-left, 0px));
+        padding-right: calc(12px + var(--tg-safe-area-inset-right, 0px));
+        padding-bottom: 8px;
+        background: #16181c;
+      }
+
+      .dicom-toolbar button,
+      .series-bar button {
+        background: #2a2d33;
+        color: #eee;
+        border: 1px solid #3a3f47;
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-size: 14px;
+        cursor: pointer;
+      }
+
+      .dicom-toolbar button:hover,
+      .series-bar button:hover {
+        background: #353941;
+      }
+
+      .dicom-toolbar button.primary {
+        background: #2f6fed;
+        border-color: #2f6fed;
+      }
+
+      .cache-label {
+        font-size: 13px;
+        color: #aaa;
+      }
+
+      .cache-label input {
+        width: 56px;
+      }
+
+      .status {
+        font-size: 13px;
+        color: #9fd49f;
+        word-break: break-word;
+      }
+
+      /* ── Лента серий ──────────────────────────────────────────────── */
+      .series-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px 12px;
+        background: #101216;
+        max-height: 96px;
+        overflow-y: auto;
+      }
+
+      .series-bar:empty {
+        display: none;
+      }
+
+      /* ── Вьюпорт Cornerstone ────────────────────────────────────────
+         Канвас растягивается на всё свободное место (flex:1); реальный
+         размер элемента читает Cornerstone при renderingEngine.resize(). */
+      .cornerstone-viewport {
+        position: relative;
+        flex: 1 1 auto;
+        min-height: 0;             /* без этого flex-элемент не даёт ужаться */
+        width: 100%;
+        background: #000;
+        touch-action: none;        /* системный зум/скролл отданы Cornerstone */
+        user-select: none;
+        -webkit-user-select: none;
+      }
+
+      .cornerstone-viewport #viewport {
+        width: 100%;
+        height: 100%;
+      }
+
+      /* Информационные углы (ориентация/пациент/толщина среза) */
+      .corner {
+        position: absolute;
+        color: #fff;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 12px;
+        pointer-events: none;
+        text-shadow: 1px 1px 0 #000;
+        z-index: 10;
+        background: rgba(0, 0, 0, 0.4);
+        padding: 2px 4px;
+        white-space: pre;
+      }
+
+      .corner-tl { top: 8px; left: 8px; }
+      .corner-tr { top: 8px; right: 8px; text-align: right; }
+      .corner-bl { bottom: 8px; left: 8px; }
+      .corner-br { bottom: 8px; right: 8px; text-align: right; }
+
+      /* ── Слайдер срезов (мобильная замена колесу мыши) ────────────── */
+      .slice-nav {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px calc(12px + var(--tg-safe-area-inset-right, 0px)) calc(8px + var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px)) calc(12px + var(--tg-safe-area-inset-left, 0px));
+        background: #16181c;
+      }
+
+      .slice-nav button {
+        background: #2a2d33;
+        color: #eee;
+        border: 1px solid #3a3f47;
+        border-radius: 6px;
+        width: 40px;
+        height: 34px;
+        font-size: 20px;
+        line-height: 1;
+        cursor: pointer;
+        flex: 0 0 auto;
+      }
+
+      .slice-nav button:hover {
+        background: #353941;
+      }
+
+      .slice-nav input[type='range'] {
+        flex: 1 1 auto;
+        min-width: 80px;
+        accent-color: #2f6fed;
+        touch-action: none;
+      }
+
+      .slice-nav input[type='range']:disabled {
+        opacity: 0.35;
+      }
+
+      .slice-label {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 13px;
+        color: #aaa;
+        flex: 0 0 auto;
+        min-width: 64px;
+        text-align: right;
+      }
+
+      /* ── Метрики ──────────────────────────────────────────────────── */
+      .metrics-wrap {
+        background: #101216;
+        border-top: 1px solid #22262c;
+      }
+
+      .metrics-wrap summary {
+        padding: 6px 12px;
+        font-size: 13px;
+        color: #aaa;
+        cursor: pointer;
+      }
+
+      .metrics-wrap #metrics {
+        padding: 4px 12px 10px;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: #9fd49f;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      input[type='file'],
+      input[type='number'] {
+        color: #eee;
+        background: #1c1f24;
+        border: 1px solid #3a3f47;
+        border-radius: 6px;
+        padding: 4px 6px;
+      }
+
+      input[type='file'] {
+        max-width: 60vw;
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-B4yLiCNk.js"></script>
   </head>
   <body>
     <div id="app"></div>
