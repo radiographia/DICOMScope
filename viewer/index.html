@@ -9,8 +9,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="robots" content="noindex,nofollow" />
     <link rel="icon" href="data:," />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://telegram.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://telegram.org; font-src 'self'; object-src 'none'; base-uri 'self'" />
+    <!-- CSP: script/connect — Telegram WebView + GoatCounter (gc.zgo.at —
+         сам count.js; dicomscope.goatcounter.com — beacon-эндпоинт, по
+         connect-src уходит sendBeacon, по img-src — img-фолбэк count.js
+         при заблокированном sendBeacon). -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://telegram.org https://gc.zgo.at; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://dicomscope.goatcounter.com; connect-src 'self' https://telegram.org https://dicomscope.goatcounter.com; font-src 'self'; object-src 'none'; base-uri 'self'" />
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <!-- GoatCounter: статистика просмотров. https:// явно (не «//») —
+         страница открывается и по file:// в Telegram Desktop. allow_frame:
+         в Telegram Mini App страница живёт в iframe (иначе filter()
+         молча отбросит hit). allow_local — для локальной отладки. -->
+    <script data-goatcounter="https://dicomscope.goatcounter.com/count"
+            data-goatcounter-settings='{"allow_frame":true,"allow_local":true}'
+            async src="https://gc.zgo.at/count.js"></script>
     <title>DICOMScope Viewer Spike</title>
     <style>
       /* Единый полноэкранный каркас: 100dvh корректно считает высоту
@@ -105,6 +116,38 @@
         font-size: 13px;
         color: #9fd49f;
         word-break: break-word;
+      }
+
+      /* ── Шкала прогресса ────────────────────────────────────────────
+         Полоса на всю ширину под тулбаром: заметна и в Telegram WebView,
+         и на десктопе; видна в обе фазы — скан ZIP (воркер) и извлечение
+         срезов серии. Заполнение через width:%. */
+      .progress-wrap {
+        position: relative;
+        height: 18px;
+        background: #1d2026;
+        border-bottom: 1px solid #2a2d33;
+        overflow: hidden;
+      }
+
+      .progress-bar {
+        height: 100%;
+        background: #2f6fed;
+        transition: width 120ms linear;
+      }
+
+      .progress-text {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 600;
+        color: #fff;
+        text-shadow: 0 0 3px rgba(0, 0, 0, 0.8);
+        white-space: nowrap;
+        overflow: hidden;
       }
 
       /* ── Лента серий ──────────────────────────────────────────────── */
@@ -241,7 +284,7 @@
         max-width: 60vw;
       }
     </style>
-    <script type="module" crossorigin src="./assets/index-BkjMRRPO.js"></script>
+    <script type="module" crossorigin src="./assets/index-BkdqGFKl.js"></script>
   </head>
   <body>
     <div id="app"></div>
